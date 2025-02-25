@@ -11,22 +11,15 @@
 #include <netdb.h>
 #include <pthread.h>
 
-/*
-Membership Service: 
+// Membership Service - PARTS 1, 2, and 3
 
-Each peer starts by knowing a list representing the exhaustive set of hosts that can be part of the group.
-Leader is the first host in the file and peers know who the leader is from the file startup.
-Goal: peers build and maintain a list of all alive peers. Membership consists of a unique id aka view id and the list of alive peers.
-	- view id should be monotonically increasing and create a total order even when leader changes
-	- everytime membership list changes, EACH peer prints new view id AND new list of peers (with list in increasing order of peer id)
-*/
 
 #define MAX_PEERS 10 // maximum number of peers is 10 
 #define PORT 8080 // port for communication
 #define MAX_BUFFER 1024 // maximum buffer size for messages
 
 #define HEARTBEAT_INTERVAL 2 // sends heartbeats every 2 seconds
-#define HEARTBEAT_TIMEOUT 5 // peer is unreachable after 5 seconds - greater than twice the heartbeat interval 
+#define HEARTBEAT_TIMEOUT 4 // peer is unreachable after 4 seconds - twice the heartbeat interval 
 #define UDP_PORT 8081 // diff port for UDP heartbeats
 
 // defines types of messages exchanged between peers during updates to membership 
@@ -82,7 +75,10 @@ struct PeerState {
 	time_t last_heartbeat[MAX_PEERS]; // PART2: last time heartbeat was received from each peer
 	int peer_active[MAX_PEERS]; // PART2: flag to track whether each peer is active 
 	pthread_mutex_t state_mutex; // PART2: mutex to protect state updates
-	int shutdown_flag; // PART2: flag to signal threads to exit 
+	int shutdown_flag; // PART2: flag to signal the 3 heartbeat related threads to exit 
+
+	int failed_peer_id; // ID of the peer that was detected as failed 
+	int has_failed_peer; // flag indicating whether a peer failure needs to be handled
 };
 
 
@@ -95,17 +91,15 @@ void* receive_messages(void* arg); // listens for and handles incoming messages
 void print_membership(); // prints current membership state in given format 
 
 // functions for part 2: failure detector
-void start_heartbeat_thread(); // starts heartbeat related threads 
-void* send_heartbeats(void* arg); // thread that sends heartbeats to all members periodically 
+void start_heartbeat_thread(); // inits and starts 3 heartbeat related threads 
+void* send_heartbeats(void* arg); // thread that sends a UDP heartbeat message to all active peers in the membership list, runs forever and sends heartbeats every 2 secs 
 void* monitor_heartbeats(void* arg); // thread that monitors in case of missing heartbeats 
 void send_udp_heartbeat(int peer_id); // sends UDP heartbeat msg to specific peer 
 void* receive_heartbeats(void* arg); // thread that listens for incoming heartbeats
 void crash_peer(int delay); // simulates a crash after a delay 
 
+// functions for part 3: delete a peer from the membership list 
+void remove_member(int peer_id);
+void handle_failed_peer(); 
 
 #endif 
-
-
-
-
-

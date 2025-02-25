@@ -1,31 +1,105 @@
 #include "membership.h"
 
 /*
-Membership Service - Part 1: Add a peer to the membership list 
+Membership Service - 
+Part 1: Add a peer to the membership list 
 Part 2: Failure Detector - each peer will implement a failure detector 
 Part 3: Delete a peer from the membership list
 */
 
-
 struct PeerState state; // global var to store peer details
-
 static int last_view_id = -1; // tracks last view_id to avoid duplicate prints
+
+
+// PART 3 ------------------------------------------------------------------------------------------
+
+// helper to remove a member from the membership list 
+void remove_member(int peer_id) {
+	pthread_mutex_lock(&state.state_mutex);
+
+	// checks if member exists in the list
+    int member_index = -1;
+    for (int i = 0; i < state.member_count; i++) {
+        if (state.members[i] == peer_id) {
+            member_index = i;
+            break;
+        }
+    }
+    
+    // if member was found then removes it by shifting the array
+    if (member_index != -1) {
+        for (int i = member_index; i < state.member_count - 1; i++) {
+            state.members[i] = state.members[i + 1];
+        }
+        state.member_count--;
+    }
+
+	pthread_mutex_unlock(&state.state_mutex);
+}
+
+
+// handles failed peer deletion 
+void handle_failed_peer() {
+    pthread_mutex_lock(&state.state_mutex);
+    
+    if (state.has_failed_peer && state.is_leader) {
+        int failed_peer_id = state.failed_peer_id;
+        state.has_failed_peer = 0;  // resets flag
+        
+        // is leader is alone, directly removes member
+        if (state.member_count <= 2) { // leader and failed peer
+            remove_member(failed_peer_id);
+            state.view_id++;
+            print_membership();
+            broadcast_newview(-1); // no new peer to add
+        } else {
+            // init pending delete operation
+            state.pending_op.active = 1;
+            state.pending_op.request_id = state.next_request_id++;
+            state.pending_op.type = DEL;
+            state.pending_op.peer_id = failed_peer_id;
+            state.pending_op.ok_count = 0;
+            
+            // expect OKs from all alive members except leader and the failed peer
+            state.pending_op.expected_oks = state.member_count - 2;  // -1 for leader & -1 for failed peer
+            
+            // sends REQ to all current members except self and the failed peer
+            struct Message req_msg = {
+                .type = REQ,
+                .op_type = DEL,
+                .request_id = state.pending_op.request_id,
+                .view_id = state.view_id,
+                .peer_id = failed_peer_id
+            };
+            
+            for (int i = 0; i < state.member_count; i++) {
+                if (state.members[i] != state.peer_id && state.members[i] != failed_peer_id && 
+                    state.peer_active[state.members[i] - 1]) {
+                    send_message(&req_msg, state.hostnames[state.members[i] - 1]);
+                }
+            }
+        }
+    }
+    
+    pthread_mutex_unlock(&state.state_mutex);
+}
+
 
 // PART 2 ------------------------------------------------------------------------------------------
 
-// starts heartbeat related threads 
+// inits and starts 3 heartbeat related threads 
 void start_heartbeat_thread() {
-	pthread_t send_thread;
-	pthread_t receive_thread;
-	pthread_t monitor_thread;
+	pthread_t send_thread; // sends periodic heartbeats to other active peers
+	pthread_t receive_thread; // listens for incoming heartbeats from other peers
+	pthread_t monitor_thread; // detects peer failures if heartbeats are missing 
     
     pthread_mutex_init(&state.state_mutex, NULL); // init mutex for thread safety
     
-    // init heartbeat tracking
+    // init heartbeat tracking timestamps 
     time_t current_time = time(NULL);
     for (int i = 0; i < MAX_PEERS; i++) {
         state.last_heartbeat[i] = current_time;
-        state.peer_active[i] = 0;
+        state.peer_active[i] = 0; // defaults as peers are inactive 
         
         // marks peers in membership list as active
         for (int j = 0; j < state.member_count; j++) {
@@ -42,7 +116,7 @@ void start_heartbeat_thread() {
     pthread_create(&monitor_thread, NULL, monitor_heartbeats, NULL);
 }
 
-// thread that sends heartbeats to all members periodically 
+// thread that sends a UDP heartbeat message to all active peers in the membership list, runs forever and sends heartbeats every 2 secs 
 void* send_heartbeats(void* arg) {
 	int sock = socket(AF_INET, SOCK_DGRAM, 0);  // opens socket once here 
     if (sock < 0) {
@@ -69,7 +143,7 @@ void* send_heartbeats(void* arg) {
     return NULL;
 }
 
-// sends UDP heartbeat msg to specific peer 
+// sends UDP heartbeat msg to specific peer and checks on host before sending
 void send_udp_heartbeat(int peer_id) {
 	int sock = socket(AF_INET, SOCK_DGRAM, 0); // creates UDP socket
     
@@ -97,11 +171,11 @@ void send_udp_heartbeat(int peer_id) {
     close(sock);
 }
     
-// thread that listens for incoming heartbeats
+// thread that listens for incoming UDP heartbeats from other peers and once a heartbeat is received, updates the timestamp for that peer 
 void* receive_heartbeats(void* arg) {
 	int sock = socket(AF_INET, SOCK_DGRAM, 0); // creates UDP socket
     
-    // sets up addre struct
+    // sets up addr struct
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = INADDR_ANY,  // listens on all interfaces
@@ -135,7 +209,7 @@ void* receive_heartbeats(void* arg) {
     return NULL;
 }
 
-// thread that monitors in case of missing heartbeats 
+// thread that continuously checks if any peer has failed aka missing 2 consecutive heartbeats from that peer
 void* monitor_heartbeats(void* arg) {
 	while (!state.shutdown_flag) {
         time_t current_time = time(NULL);
@@ -164,6 +238,12 @@ void* monitor_heartbeats(void* arg) {
                     } else {
                         fprintf(stderr, "{peer_id:%d, view_id: %d, leader: %d, message:\"peer %d unreachable\"}\n", state.peer_id, state.view_id, state.leader_id, peer_id);
                     }
+
+					// PART 3: only leader inits removal
+					if (state.is_leader && peer_id != state.leader_id) {
+                        state.failed_peer_id = peer_id;
+                        state.has_failed_peer = 1;
+                    }
                 }
             }
         }
@@ -174,7 +254,7 @@ void* monitor_heartbeats(void* arg) {
     return NULL;
 }
 
-// simulates a crash after a delay 
+// simulates a peer crash after a given delay, logs the crash msg, & sets shutdown flag to allow threads to make a clean exit 
 void crash_peer(int delay) {
 	if (delay > 0) {
         sleep(delay);
@@ -193,10 +273,9 @@ void crash_peer(int delay) {
 	pthread_mutex_destroy(&state.state_mutex); // destroys mutex
 	exit(0);
 }
-   
 
 
-// PART 1 (and PART 2) -----------------------------------------------------------------------------------------------
+// PART 1 (and PART 2 & 3 EDITS) -----------------------------------------------------------------------------------------------
 
 // initializes peer's state from given hostsfile and adds init delay
 void init_state(char* hostsfile, int delay) {
@@ -238,6 +317,8 @@ void init_state(char* hostsfile, int delay) {
     state.is_leader = (state.peer_id == 1); // checks if this peer is leader
     state.next_request_id = 1; // starts request IDs at 1
 	state.peer_active[state.peer_id - 1] = 1; // marks itself as active
+	state.failed_peer_id = 0; // PART 3
+	state.has_failed_peer = 0; // PART 3
     
     // leader starts with itself in membership list and other peers start with empty list
     state.member_count = state.is_leader ? 1 : 0;
@@ -261,12 +342,18 @@ void start_peer() {
 
 	start_heartbeat_thread(); // starts heartbeats
 
-	/*
-	when a peer starts it will contact the leader by sending a JOIN message
-	*/
+	// when a peer starts it will contact the leader by sending a JOIN message
     if (!state.is_leader) { // if not leader, begin JOIN protocol
         handle_join();
     }
+
+	// PART 3: main loop to check for failed peers and handles them 
+	while (!state.shutdown_flag) {
+		if (state.is_leader) {
+			handle_failed_peer();
+		}
+		sleep(1);
+	}
 
     pthread_join(receive_thread, NULL); // waits for receive thread to finish - but runs forever 
 }
@@ -449,10 +536,16 @@ void* receive_messages(void* arg) {
 						
 						// if all expected OKs are received, update membership and broadcast 
 						if (state.pending_op.ok_count >= state.pending_op.expected_oks) {
-							add_member(state.pending_op.peer_id); // adds new member
+							if (state.pending_op.type == ADD) {
+								add_member(state.pending_op.peer_id); // adds new member
+							} else if (state.pending_op.type == DEL) {
+								remove_member(state.pending_op.peer_id); // removes failed peer
+							}
+							
 							state.view_id++;
 							print_membership();
-							broadcast_newview(state.pending_op.peer_id); // broadcasts new view to all members
+							broadcast_newview(state.pending_op.type == ADD ? state.pending_op.peer_id : -1);
+							//broadcast_newview(state.pending_op.peer_id); // broadcasts new view to all members
 							state.pending_op.active = 0; // clears pending op
 						}
 					}
@@ -562,16 +655,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
-
-
-/*
-TEST CASE 1:
-- each process joins 1 by 1, til all processes from config file joined
-- leader starts first
-- at end you should see for each peer how the membership list and view id changed, EVERY time a NEW peer joined 
-- every time a peer joins, all peers in membership should print: {peer_id:<ID>, view_id: <VIEW_ID>, leader: <LEADER_ID>, memb_list: [<COMMA_SEPARATED_MEMBERS>]}
-	- where peer id is the id of the local peer, view id is the current view id of local peer and leader is current leader id. 
-*/
-
-
