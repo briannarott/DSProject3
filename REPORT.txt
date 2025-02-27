@@ -1,5 +1,12 @@
 describing the system architectures, state diagrams, design decisions, and implementation issues
 
+
+
+
+
+
+
+
 system architectures:
 - each peer maintains the following:
 	- peer id and view id to track membership state
