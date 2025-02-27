@@ -1,12 +1,5 @@
 describing the system architectures, state diagrams, design decisions, and implementation issues
 
-
-
-
-
-
-
-
 system architectures:
 - each peer maintains the following:
 	- peer id and view id to track membership state
@@ -28,12 +21,14 @@ state diagrams:
 	- HEARTBEAT -> failure detection -> REQ DEL -> OK -> NEWVIEW (failure handling)
 	- NEWLEADER -> PENDING -> recovery -> NEWVIEW (leader failure)
 
-
 design decisions:
 - used mutex locks to prevent race conditions in membership updates
 - UDP for heartbeats because "all the HEARTBEAT messages should be implemented with UDP. Heartbeat messages are not reliable."
 - TCP for membership updates because it ensures reliable communication whereas if I used UDP, I would be required to implement a reliable channel. 
 
-
 implementation issues:
-
+- experienced some race conditions 
+- errors with reading the hostsfile
+- confusion with the Makefile 
+- various debugging sessions
+- using TCP for messages and UDP for heartbeats was challenging at first 
