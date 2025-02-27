@@ -10,6 +10,23 @@ Part 3: Delete a peer from the membership list
 struct PeerState state; // global var to store peer details
 static int last_view_id = -1; // tracks last view_id to avoid duplicate prints
 
+/*
+PROJECT3 TODO:
+- fix part2 impl so that testcase 2 passes everytime? why different outcomes?
+- for part3 testcase3, is it fine that "peer # unreachable" is printed, then next peer starts crashing, 
+	then updated mem list is printed by the remaining peers? Is this order incorrect?
+- implement part4 extra credit?
+- complete README and REPORT
+- make a makefile 
+
+QUESTIONS:
+- For testcase 3 it says, "You can implement the crash in a script, 
+	or you can do it manually and specify in the README how you tested.) " 
+	- does this mean that just using dockerfile compose 3 for testing part3 is not enough?
+- Is my view_id correctly increasing when crashes are involved? 
+*/
+
+
 
 // PART 3 ------------------------------------------------------------------------------------------
 
