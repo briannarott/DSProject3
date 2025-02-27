@@ -1,3 +1,32 @@
 describing the system architectures, state diagrams, design decisions, and implementation issues
 
+system architectures:
+- each peer maintains the following:
+	- peer id and view id to track membership state
+	- membership list 
+	- heartbeat monitoring with UDP
+	- pending operations 
+- each peer communications using TCP for membership updates and UDP for failure detection.
+- my system allows for membership changes and guarantees that all peers have a consistent view of the system state
+
+state diagrams:
+- peer lifecycle:
+	- start up by reading hostsfile, inits state, determines leader
+	- join by sending join request to leader and waits for NEWVIEW message
+	- membership works by exchanging heartbeats and responding to leader messages
+	- failure and deletion is detected by being unreachable and then the peer is removed with the DEL operation
+	- for leader failure, a new leader election is conducted and peers go through the recovery process
+- messages:
+	- JOIN -> REQ -> OK -> NEWVIEW (peer joining the list)
+	- HEARTBEAT -> failure detection -> REQ DEL -> OK -> NEWVIEW (failure handling)
+	- NEWLEADER -> PENDING -> recovery -> NEWVIEW (leader failure)
+
+
+design decisions:
+- used mutex locks to prevent race conditions in membership updates
+- UDP for heartbeats because "all the HEARTBEAT messages should be implemented with UDP. Heartbeat messages are not reliable."
+- TCP for membership updates because it ensures reliable communication whereas if I used UDP, I would be required to implement a reliable channel. 
+
+
+implementation issues:
 

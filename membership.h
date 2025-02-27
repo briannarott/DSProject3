@@ -12,6 +12,7 @@
 #include <pthread.h>
 
 // Membership Service - PARTS 1, 2, and 3
+// EXTRA CREDIT - PART4
 
 
 #define MAX_PEERS 10 // maximum number of peers is 10 
@@ -28,7 +29,8 @@ enum MessageType {
 	REQ = 2, // sent by leader to existing members when processing a join 
 	OK = 3, // sent by members to acknowledge a REQ message
 	NEWVIEW = 4, // sent by leader to all members to update membership list 
-	HEARTBEAT = 5 // PART2: each peer will broadcast a heartbeat message
+	HEARTBEAT = 5, // PART2: each peer will broadcast a heartbeat message
+	NEWLEADER = 6 // PART4: new leader sends to all peers asking if they have any pending ops
 };
 
 // represents operations types that modify membership list
@@ -87,6 +89,7 @@ void init_state(char* hostsfile, int delay); // inits peer's state from hostsfil
 void start_peer(); // starts peer's operation - either as a leader or normal member 
 void handle_join(); // handles sending a JOIN message from a new peer to leader
 void send_message(struct Message* msg, const char* hostname); // sends message to specific hostname (peer)
+void broadcast_newview(int new_peer_id); // helper to send NEWVIEW to all current members + a new member
 void* receive_messages(void* arg); // listens for and handles incoming messages 
 void print_membership(); // prints current membership state in given format 
 
@@ -101,5 +104,9 @@ void crash_peer(int delay); // simulates a crash after a delay
 // functions for part 3: delete a peer from the membership list 
 void remove_member(int peer_id);
 void handle_failed_peer(); 
+
+// functions for part 4: leader failure 
+void initiate_leader_election(); 
+void respond_to_new_leader();
 
 #endif 

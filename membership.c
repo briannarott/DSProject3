@@ -12,20 +12,75 @@ static int last_view_id = -1; // tracks last view_id to avoid duplicate prints
 
 /*
 PROJECT3 TODO:
-- fix part2 impl so that testcase 2 passes everytime? why different outcomes?
-- for part3 testcase3, is it fine that "peer # unreachable" is printed, then next peer starts crashing, 
-	then updated mem list is printed by the remaining peers? Is this order incorrect?
-- implement part4 extra credit?
+- implement part4 extra credit
 - complete README and REPORT
 - make a makefile 
 
 QUESTIONS:
+- for part3 testcase3, is it fine that "peer # unreachable" is printed, then next peer starts crashing, 
+	then updated mem list is printed by the remaining peers? Is this order incorrect?
 - For testcase 3 it says, "You can implement the crash in a script, 
 	or you can do it manually and specify in the README how you tested.) " 
 	- does this mean that just using dockerfile compose 3 for testing part3 is not enough?
 - Is my view_id correctly increasing when crashes are involved? 
 */
 
+// PART 4 ------------------------------------------------------------------------------------------
+
+// elects new leader when the current leader fails 
+void init_leader_election() {
+    pthread_mutex_lock(&state.state_mutex);
+
+    // finds new leader = lowest active peer ID
+    int new_leader_id = -1;
+    for (int i = 0; i < state.member_count; i++) {
+        int peer_id = state.members[i];
+        if (state.peer_active[peer_id - 1]) {
+            new_leader_id = peer_id;
+            break;
+        }
+    }
+
+    if (new_leader_id == -1) {
+        pthread_mutex_unlock(&state.state_mutex);
+        return;  // if no leader found then something went wrong
+    }
+
+    state.leader_id = new_leader_id;
+    state.is_leader = (state.peer_id == new_leader_id);
+
+    if (state.is_leader) {
+        struct Message newleader_msg = {
+            .type = NEWLEADER,
+            .view_id = state.view_id,
+            .peer_id = state.peer_id
+        };
+
+        // sends NEWLEADER to all remaining peers
+        for (int i = 0; i < state.member_count; i++) {
+            if (state.members[i] != state.peer_id) {
+                send_message(&newleader_msg, state.hostnames[state.members[i] - 1]);
+            }
+        }
+    }
+    pthread_mutex_unlock(&state.state_mutex);
+}
+
+// peers respond to new leader with any pending operations  
+void respond_to_new_leader() {
+    pthread_mutex_lock(&state.state_mutex);
+
+    struct Message response_msg = {
+        .type = NEWLEADER,
+        .view_id = state.view_id,
+        .request_id = state.pending_op.request_id,
+        .op_type = state.pending_op.active ? state.pending_op.type : NOTHING,
+        .peer_id = state.pending_op.peer_id
+    };
+
+    send_message(&response_msg, state.hostnames[state.leader_id - 1]);
+    pthread_mutex_unlock(&state.state_mutex);
+}
 
 
 // PART 3 ------------------------------------------------------------------------------------------
@@ -135,6 +190,7 @@ void start_heartbeat_thread() {
 
 // thread that sends a UDP heartbeat message to all active peers in the membership list, runs forever and sends heartbeats every 2 secs 
 void* send_heartbeats(void* arg) {
+	(void)arg; // makefile error
 	int sock = socket(AF_INET, SOCK_DGRAM, 0);  // opens socket once here 
     if (sock < 0) {
         perror("Error creating socket");
@@ -190,6 +246,7 @@ void send_udp_heartbeat(int peer_id) {
     
 // thread that listens for incoming UDP heartbeats from other peers and once a heartbeat is received, updates the timestamp for that peer 
 void* receive_heartbeats(void* arg) {
+	(void)arg; // makefile error
 	int sock = socket(AF_INET, SOCK_DGRAM, 0); // creates UDP socket
     
     // sets up addr struct
@@ -228,6 +285,7 @@ void* receive_heartbeats(void* arg) {
 
 // thread that continuously checks if any peer has failed aka missing 2 consecutive heartbeats from that peer
 void* monitor_heartbeats(void* arg) {
+	(void)arg; // makefile error
 	while (!state.shutdown_flag) {
         time_t current_time = time(NULL);
         
@@ -252,7 +310,8 @@ void* monitor_heartbeats(void* arg) {
                     // prints failure detection message
                     if (peer_id == state.leader_id) {
                         fprintf(stderr, "{peer_id:%d, view_id: %d, leader: %d, message:\"peer %d (leader) unreachable\"}\n", state.peer_id, state.view_id, state.leader_id, peer_id);
-                    } else {
+						init_leader_election(); // PART4
+					} else {
                         fprintf(stderr, "{peer_id:%d, view_id: %d, leader: %d, message:\"peer %d unreachable\"}\n", state.peer_id, state.view_id, state.leader_id, peer_id);
                     }
 
@@ -451,6 +510,7 @@ void broadcast_newview(int new_peer_id) {
 
 // handles incoming messages 
 void* receive_messages(void* arg) {
+	(void)arg; // makefile error
     int server_sock = socket(AF_INET, SOCK_STREAM, 0); // creates TCP socket for receiving 
 
     // sets up address structure for binding
@@ -601,8 +661,36 @@ void* receive_messages(void* arg) {
 					}
 					pthread_mutex_unlock(&state.state_mutex);
 				}
-                break; 
-        }
+			case HEARTBEAT:
+				// nothing??
+				break;
+
+			case NEWLEADER: 
+				// PART 4
+				/*if (!state.is_leader) {
+					pthread_mutex_lock(&state.state_mutex);
+					state.leader_id = msg.peer_id; // updates leader
+					state.view_id = msg.view_id;  // syncs view
+					pthread_mutex_unlock(&state.state_mutex);
+					respond_to_new_leader(); // respond with any pending ops
+				} else { // if this peer is the new leader
+					pthread_mutex_lock(&state.state_mutex);
+					if (msg.op_type == PENDING) {
+						if (msg.view_id == state.view_id) {
+							if (msg.op_type == ADD) {
+								add_member(msg.peer_id);
+							} else if (msg.op_type == DEL) {
+								remove_member(msg.peer_id);
+							}
+							state.view_id++;
+							print_membership();
+							broadcast_newview(msg.peer_id);
+						}
+					}
+					pthread_mutex_unlock(&state.state_mutex);
+				}*/
+				break;
+		}
         close(client_sock); // closes connection after handling message
     }
     return NULL;
