@@ -32,3 +32,22 @@ implementation issues:
 - confusion with the Makefile 
 - various debugging sessions
 - using TCP for messages and UDP for heartbeats was challenging at first 
+
+
+
+
+PART ONE DIAGRAM during brainstorm session:
+
+1. Leader -> REQ -> P1 (op: ADD)
+Leader -> REQ -> P2 (op: ADD)
+
+2.  Leader <- OK <- P1
+Leader <- OK <- P2
+
+3. Leader -> NEWVIEW -> P1 
+Leader -> NEWVIEW -> P2
+
+
+
+
+

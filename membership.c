@@ -5,6 +5,7 @@ Membership Service -
 Part 1: Add a peer to the membership list 
 Part 2: Failure Detector - each peer will implement a failure detector 
 Part 3: Delete a peer from the membership list
+Part 4: Leader failure (extra credit)
 */
 
 struct PeerState state; // global var to store peer details
@@ -12,20 +13,10 @@ static int last_view_id = -1; // tracks last view_id to avoid duplicate prints
 
 /*
 PROJECT3 TODO:
-- implement part4 extra credit
-- complete README and REPORT
-- make a makefile 
-
-QUESTIONS:
-- for part3 testcase3, is it fine that "peer # unreachable" is printed, then next peer starts crashing, 
-	then updated mem list is printed by the remaining peers? Is this order incorrect?
-- For testcase 3 it says, "You can implement the crash in a script, 
-	or you can do it manually and specify in the README how you tested.) " 
-	- does this mean that just using dockerfile compose 3 for testing part3 is not enough?
-- Is my view_id correctly increasing when crashes are involved? 
+- improve/check README and REPORT
 */
 
-// PART 4 ------------------------------------------------------------------------------------------
+// PART 4: EXTRA CREDIT ------------------------------------------------------------------------------------------
 
 // elects new leader when the current leader fails 
 void init_leader_election() {
@@ -43,7 +34,7 @@ void init_leader_election() {
 
     if (new_leader_id == -1) {
         pthread_mutex_unlock(&state.state_mutex);
-        return;  // if no leader found then something went wrong
+        return;  // if no leader found then something wrong
     }
 
     state.leader_id = new_leader_id;
@@ -58,8 +49,9 @@ void init_leader_election() {
 
         // sends NEWLEADER to all remaining peers
         for (int i = 0; i < state.member_count; i++) {
-            if (state.members[i] != state.peer_id) {
-                send_message(&newleader_msg, state.hostnames[state.members[i] - 1]);
+			int peer_id = state.members[i];
+            if (peer_id != state.peer_id && state.peer_active[peer_id - 1]) {
+                send_message(&newleader_msg, state.hostnames[peer_id - 1]);
             }
         }
     }
@@ -68,19 +60,26 @@ void init_leader_election() {
 
 // peers respond to new leader with any pending operations  
 void respond_to_new_leader() {
-    pthread_mutex_lock(&state.state_mutex);
+	pthread_mutex_lock(&state.state_mutex);
+
+    // only sends pending op if one exists
+    int op_type = NOTHING;
+    if (state.pending_op.active) {
+        op_type = state.pending_op.type;
+    }
 
     struct Message response_msg = {
         .type = NEWLEADER,
         .view_id = state.view_id,
         .request_id = state.pending_op.request_id,
-        .op_type = state.pending_op.active ? state.pending_op.type : NOTHING,
+        .op_type = op_type,
         .peer_id = state.pending_op.peer_id
     };
 
     send_message(&response_msg, state.hostnames[state.leader_id - 1]);
     pthread_mutex_unlock(&state.state_mutex);
 }
+
 
 
 // PART 3 ------------------------------------------------------------------------------------------
@@ -193,7 +192,6 @@ void* send_heartbeats(void* arg) {
 	(void)arg; // makefile error
 	int sock = socket(AF_INET, SOCK_DGRAM, 0);  // opens socket once here 
     if (sock < 0) {
-        perror("Error creating socket");
         return NULL;
     }
 
@@ -228,7 +226,6 @@ void send_udp_heartbeat(int peer_id) {
     
     struct hostent* host = gethostbyname(state.hostnames[peer_id - 1]);
 	if (!host) {  // PART2: check if gethostbyname failed
-        //fprintf(stderr, "Error: Could not resolve hostname for peer %d\n", peer_id);
         close(sock);
         return;
     }
@@ -577,9 +574,7 @@ void* receive_messages(void* arg) {
                 break;
 
 			// member needs to save the op and send OK back to leader
-			/*
-			IMPLEMENT: when peers receive a REQ, each peer must save the op he must perform
-			*/
+			// when peers receive a REQ, each peer must save the op he must perform
             case REQ: 
 				if (!state.is_leader) {
 					 // saves the operation that needs to be performed - "Each peer saves the operation he must perform"
@@ -588,9 +583,6 @@ void* receive_messages(void* arg) {
                     state.pending_op.type = msg.op_type;
                     state.pending_op.peer_id = msg.peer_id;
 
-					// DELETE - debug output to confirm operation was saved
-					//fprintf(stderr, "DEBUG: {peer_id:%d, saved_op: request_id=%d, op_type=%d, peer_id=%d}\n", state.peer_id, state.pending_op.request_id, state.pending_op.type, state.pending_op.peer_id);
-
             		// sends OK back to leader containing request id and current view id
 					struct Message ok_msg = {
 						.type = OK,
@@ -598,7 +590,7 @@ void* receive_messages(void* arg) {
 						//.request_id = msg.request_id,
 						.view_id = msg.view_id
 					};
-            	send_message(&ok_msg, state.hostnames[state.leader_id - 1]);
+            		send_message(&ok_msg, state.hostnames[state.leader_id - 1]);
         		}
                 break;
 
@@ -661,34 +653,48 @@ void* receive_messages(void* arg) {
 					}
 					pthread_mutex_unlock(&state.state_mutex);
 				}
+
 			case HEARTBEAT:
-				// nothing??
+				// nothing?? - makefile error so have to include 
 				break;
 
 			case NEWLEADER: 
 				// PART 4
-				/*if (!state.is_leader) {
+				if (!state.is_leader) {
 					pthread_mutex_lock(&state.state_mutex);
 					state.leader_id = msg.peer_id; // updates leader
-					state.view_id = msg.view_id;  // syncs view
+					state.is_leader = (state.peer_id == msg.peer_id); // updates is_leader flag
+					//state.view_id = msg.view_id;  // syncs view
 					pthread_mutex_unlock(&state.state_mutex);
 					respond_to_new_leader(); // respond with any pending ops
 				} else { // if this peer is the new leader
 					pthread_mutex_lock(&state.state_mutex);
-					if (msg.op_type == PENDING) {
-						if (msg.view_id == state.view_id) {
-							if (msg.op_type == ADD) {
-								add_member(msg.peer_id);
-							} else if (msg.op_type == DEL) {
-								remove_member(msg.peer_id);
+					if (msg.op_type != NOTHING) { // checks if peer has pending op to handle
+						// processes pending op from other peer
+						state.pending_op.active = 1;
+						state.pending_op.request_id = state.next_request_id++;
+						state.pending_op.type = msg.op_type;
+						state.pending_op.peer_id = msg.peer_id;
+						state.pending_op.ok_count = 0;
+						state.pending_op.expected_oks = state.member_count - 2; // -1 for leader and -1 for other peer
+						
+						// sends REQ to all members except self and the other peer
+						struct Message req_msg = {
+							.type = REQ,
+							.op_type = msg.op_type,
+							.request_id = state.pending_op.request_id,
+							.view_id = state.view_id,
+							.peer_id = msg.peer_id
+						};
+						
+						for (int i = 0; i < state.member_count; i++) {
+							if (state.members[i] != state.peer_id && state.members[i] != msg.peer_id && state.peer_active[state.members[i] - 1]) {
+								send_message(&req_msg, state.hostnames[state.members[i] - 1]);
 							}
-							state.view_id++;
-							print_membership();
-							broadcast_newview(msg.peer_id);
 						}
 					}
 					pthread_mutex_unlock(&state.state_mutex);
-				}*/
+				} 
 				break;
 		}
         close(client_sock); // closes connection after handling message
@@ -707,8 +713,7 @@ void print_membership() {
     
     // prints list of members separated by a comma 
     for (int i = 0; i < state.member_count; i++) {
-        fprintf(stderr, "%d%s", state.members[i], 
-                i < state.member_count - 1 ? "," : "");
+        fprintf(stderr, "%d%s", state.members[i], i < state.member_count - 1 ? "," : "");
     }
     
     fprintf(stderr, "]}\n");
@@ -735,6 +740,9 @@ int main(int argc, char* argv[]) {
 			case 'c':
 				crash_delay = atoi(optarg); // delays before crashing
 				break;
+			case 't':
+				crash_delay = atoi(optarg);
+				break;
             default:
                 fprintf(stderr, "Usage: %s -h hostsfile [-d delay]\n", argv[0]);
                 exit(EXIT_FAILURE);
@@ -757,6 +765,5 @@ int main(int argc, char* argv[]) {
     }
 
     start_peer();
-
     return 0;
 }
